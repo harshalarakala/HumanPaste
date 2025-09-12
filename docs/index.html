@@ -21,6 +21,19 @@
         <a class="btn" href="HumanPaste.dmg">Download latest DMG</a>
       </p>
       <p class="muted">After download: move the app to <code>/Applications</code>, then grant Accessibility and Input Monitoring permissions in System Settings → Privacy &amp; Security.</p>
+      <details style="margin-top:12px"><summary>Having trouble opening (Gatekeeper)?</summary>
+        <div class="muted" style="margin-top:8px">
+          Run these commands to install from the downloaded DMG and remove quarantine:
+          <pre><code>DMG=~/Downloads/HumanPaste.dmg
+MNT=$(hdiutil attach -nobrowse -noverify -noautoopen "$DMG" | awk '/Volumes/{print $3}')
+cp -R "$MNT/HumanPaste.app" /Applications/
+hdiutil detach "$MNT"
+xattr -dr com.apple.quarantine "/Applications/HumanPaste.app"
+codesign --force --deep --sign - "/Applications/HumanPaste.app"
+open "/Applications/HumanPaste.app"</code></pre>
+          Alternatively: right‑click the app in Finder → Open → Open.
+        </div>
+      </details>
       <p class="muted">Custom made by <a href="https://harshalarakala.com">Harshal Arakala</a> · <a href="https://github.com/harshalarakala">GitHub</a>. Source: <a href="https://github.com/harshalarakala/HumanPaste">github.com/harshalarakala/HumanPaste</a></p>
     </div>
   </body>
