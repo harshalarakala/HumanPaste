@@ -25,17 +25,18 @@
       .btn{display:inline-block;background:var(--brand);color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px}
       .btn.secondary{background:#fff;color:#111;border:1px solid var(--border)}
       .btn.small{padding:8px 12px;font-size:13px}
-      /* Download button: requested hover card style (namespaced to avoid clashes) */
-      .download-card{
-        width:190px;height:254px;background:rgb(103,225,255);transition:all .4s;border-radius:10px;
-        box-shadow:0px 0px 10px 5px rgba(0,0,0,.705);font-size:30px;font-weight:900;
-        display:block;text-decoration:none;color:#0f172a;overflow:hidden
-      }
-      .download-card:hover{border-radius:15px;cursor:pointer;transform:scale(1.2);box-shadow:0px 0px 10px 5px rgba(0,0,0,.705);background:rgb(103,151,255)}
-      .download-card .first-content{height:100%;width:100%;transition:all .4s;display:flex;justify-content:center;align-items:center;opacity:1;border-radius:15px}
-      .download-card:hover .first-content{height:0px;opacity:0}
-      .download-card .second-content{height:0%;width:100%;opacity:0;display:flex;justify-content:center;align-items:center;border-radius:15px;transition:all .4s;font-size:0px;transform:rotate(90deg) scale(-1)}
-      .download-card:hover .second-content{opacity:1;height:100%;font-size:1.8rem;transform:rotate(0deg)}
+      /* Download button: gradient card */
+      .dl-card{position:relative;display:flex;align-items:center;justify-content:space-between;gap:16px;background:#0b1220;color:#e6edf3;border-radius:18px;padding:18px 18px 18px 18px;isolation:isolate;overflow:hidden;border:1px solid rgba(255,255,255,.06);box-shadow:0 10px 30px rgba(2,6,23,.35)}
+      .dl-card:before{content:"";position:absolute;inset:-2px;border-radius:20px;padding:2px;background:linear-gradient(135deg,#60a5fa,#22d3ee 30%,#a78bfa 60%,#f472b6);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.55;z-index:0;pointer-events:none}
+      .dl-card>*{position:relative;z-index:1}
+      .dl-info{display:flex;align-items:center;gap:14px}
+      .dl-icon{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#1f2937,#0f172a);display:grid;place-items:center;border:1px solid rgba(255,255,255,.08)}
+      .dl-icon svg{width:22px;height:22px;fill:#c7d2fe}
+      .dl-text{line-height:1.2}
+      .dl-title{font-weight:600}
+      .dl-sub{font-size:12px;color:#9aa6b2}
+      .dl-action a{display:inline-flex;align-items:center;gap:8px;background:#111827;color:#fff;text-decoration:none;padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.08)}
+      .dl-action a:hover{background:#0f172a}
       .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px}
       .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
       .muted{color:var(--muted)}
@@ -55,10 +56,23 @@
           <h1>HumanPaste</h1>
           <p class="subtitle">Intercepts paste and types your clipboard with natural keystrokes. Preserves indentation, supports instant cancel, and lets you tune speed.</p>
           <div class="cta" style="width:100%">
-            <a class="download-card" href="HumanPaste.dmg" aria-label="Download HumanPaste DMG">
-              <div class="first-content">Download</div>
-              <div class="second-content">Get DMG</div>
-            </a>
+            <div class="dl-card" style="width:100%">
+              <div class="dl-info">
+                <div class="dl-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 3a1 1 0 0 1 1 1v8.586l2.293-2.293a1 1 0 1 1 1.414 1.414l-4 4a1 1 0 0 1-1.414 0l-4-4A1 1 0 1 1 8.707 10.293L11 12.586V4a1 1 0 0 1 1-1ZM5 20a1 1 0 1 1 0-2h14a1 1 0 1 1 0 2H5Z"/></svg>
+                </div>
+                <div class="dl-text">
+                  <div class="dl-title">Download for macOS</div>
+                  <div class="dl-sub">Universal DMG • Latest build</div>
+                </div>
+              </div>
+              <div class="dl-action">
+                <a href="HumanPaste.dmg" aria-label="Download HumanPaste DMG">
+                  <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M12 16a1 1 0 0 1-.707-.293l-4-4a1 1 0 1 1 1.414-1.414L11 12.586V4a1 1 0 1 1 2 0v8.586l2.293-2.293a1 1 0 1 1 1.414 1.414l-4 4A1 1 0 0 1 12 16ZM5 20a1 1 0 0 1 0-2h14a1 1 0 1 1 0 2H5Z"/></svg>
+                  <span>Download</span>
+                </a>
+              </div>
+            </div>
           </div>
           <p class="muted" style="margin-top:10px">After download, move the app to <code>/Applications</code> and grant Accessibility + Input Monitoring in System Settings → Privacy &amp; Security.</p>
         </div>
