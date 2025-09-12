@@ -25,6 +25,17 @@
       .btn{display:inline-block;background:var(--brand);color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px}
       .btn.secondary{background:#fff;color:#111;border:1px solid var(--border)}
       .btn.small{padding:8px 12px;font-size:13px}
+      /* Download button: requested hover card style (namespaced to avoid clashes) */
+      .download-card{
+        width:190px;height:254px;background:rgb(103,225,255);transition:all .4s;border-radius:10px;
+        box-shadow:0px 0px 10px 5px rgba(0,0,0,.705);font-size:30px;font-weight:900;
+        display:block;text-decoration:none;color:#0f172a;overflow:hidden
+      }
+      .download-card:hover{border-radius:15px;cursor:pointer;transform:scale(1.2);box-shadow:0px 0px 10px 5px rgba(0,0,0,.705);background:rgb(103,151,255)}
+      .download-card .first-content{height:100%;width:100%;transition:all .4s;display:flex;justify-content:center;align-items:center;opacity:1;border-radius:15px}
+      .download-card:hover .first-content{height:0px;opacity:0}
+      .download-card .second-content{height:0%;width:100%;opacity:0;display:flex;justify-content:center;align-items:center;border-radius:15px;transition:all .4s;font-size:0px;transform:rotate(90deg) scale(-1)}
+      .download-card:hover .second-content{opacity:1;height:100%;font-size:1.8rem;transform:rotate(0deg)}
       .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px}
       .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
       .muted{color:var(--muted)}
@@ -43,8 +54,11 @@
           <div class="badge"> macOS • Cmd+V, human‑style</div>
           <h1>HumanPaste</h1>
           <p class="subtitle">Intercepts paste and types your clipboard with natural keystrokes. Preserves indentation, supports instant cancel, and lets you tune speed.</p>
-          <div class="cta">
-            <a class="btn" href="HumanPaste.dmg">Download for macOS</a>
+          <div class="cta" style="width:100%">
+            <a class="download-card" href="HumanPaste.dmg" aria-label="Download HumanPaste DMG">
+              <div class="first-content">Download</div>
+              <div class="second-content">Get DMG</div>
+            </a>
           </div>
           <p class="muted" style="margin-top:10px">After download, move the app to <code>/Applications</code> and grant Accessibility + Input Monitoring in System Settings → Privacy &amp; Security.</p>
         </div>
