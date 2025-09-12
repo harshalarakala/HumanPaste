@@ -50,6 +50,24 @@ Usage
 3) Press Cmd+V in any text field; HumanPaste will type the clipboard text
 4) Press Cmd+V again while it’s typing to cancel (2s cooldown)
 
+Local testing
+- Build the app and a DMG:
+```
+./build.sh
+```
+- Run the built app directly:
+```
+open "$(pwd)/dist/HumanPaste.app"
+```
+- Or install from the DMG (recommended for permissions):
+```
+open "$(pwd)/dist/HumanPaste.dmg"
+# Drag HumanPaste.app to /Applications
+```
+- If Gatekeeper blocks it, follow the instructions on the website (docs/index.html) or right‑click → Open.
+- Grant Accessibility and Input Monitoring in System Settings → Privacy & Security.
+- Menubar: use the Enable/Disable toggle. A Typing Speed slider (WPM) controls average speed with a natural range.
+
 Notes
 - Some secure fields (password fields) ignore simulated keystrokes by design
 - If the menu bar item is hidden on your machine, the window checkbox fully controls enable/disable

@@ -15,9 +15,32 @@ class HumanPaste {
     private var cancelRequested = false
     private let stateQueue = DispatchQueue(label: "HumanPaste.state", attributes: .concurrent)
     
-    // Typing speed configuration (microseconds)
-    private var typingDelayBaseUs: useconds_t = 12000
-    private var typingDelayJitterUs: useconds_t = 8000
+    // Typing speed configuration (microseconds) driven by an average WPM with jitter
+    private var typingDelayBaseUs: useconds_t = 80_000   // default ~150 WPM => ~80ms/char
+    private var typingDelayJitterUs: useconds_t = 40_000 // 50% jitter
+    private var wordsPerMinute: Int = 150
+
+    init() {
+        let saved = UserDefaults.standard.integer(forKey: "typing_wpm")
+        if saved > 0 { wordsPerMinute = saved }
+        updateDelaysForWpm()
+    }
+
+    private func updateDelaysForWpm() {
+        let wpm = max(20, min(300, wordsPerMinute))
+        // Average delay per character in microseconds: 12/WPM seconds per char (5 chars per word)
+        let base = max(5_000, 12_000_000 / wpm)
+        typingDelayBaseUs = useconds_t(base)
+        typingDelayJitterUs = useconds_t(base / 2)
+    }
+
+    func setWordsPerMinute(_ wpm: Int) {
+        wordsPerMinute = max(20, min(300, wpm))
+        UserDefaults.standard.set(wordsPerMinute, forKey: "typing_wpm")
+        updateDelaysForWpm()
+    }
+
+    func getWordsPerMinute() -> Int { wordsPerMinute }
 
     private func setIsTyping(_ value: Bool) {
         stateQueue.async(flags: .barrier) { self.isTyping = value }
@@ -260,6 +283,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         toggleItem.state = .off
         toggleItem.target = self
         menu.addItem(toggleItem)
+        // WPM slider
+        let wpmItem = NSMenuItem()
+        let slider = NSSlider(value: Double(humanPaste.getWordsPerMinute()), minValue: 20, maxValue: 300, target: self, action: #selector(wpmChanged(_:)))
+        slider.isContinuous = true
+        slider.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        let valueLabel = NSTextField(labelWithString: "Current: \(humanPaste.getWordsPerMinute()) WPM")
+        valueLabel.alignment = .left
+        let wpmView = NSStackView(views: [NSTextField(labelWithString: "Typing Speed (WPM)"), slider, valueLabel])
+        wpmView.orientation = .vertical
+        wpmView.spacing = 6
+        wpmItem.view = wpmView
+        menu.addItem(wpmItem)
         menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.target = self
@@ -293,6 +328,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         win.center()
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func wpmChanged(_ sender: NSSlider) {
+        let wpm = Int(sender.integerValue)
+        humanPaste.setWordsPerMinute(wpm)
+        if let stack = (statusItem.menu?.items.first { ($0.view as? NSStackView) != nil })?.view as? NSStackView,
+           stack.views.count >= 3, let label = stack.views[2] as? NSTextField {
+            label.stringValue = "Current: \(wpm) WPM"
+        }
     }
     
     @objc private func toggleEnabled(_ sender: NSMenuItem) {
