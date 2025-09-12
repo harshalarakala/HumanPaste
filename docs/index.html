@@ -4,12 +4,15 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>HumanPaste for macOS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
       :root{
         --fg:#0f172a;--muted:#64748b;--bg:#f8fafc;--card:#ffffff;--border:#e2e8f0;--brand:#111827;
       }
       *{box-sizing:border-box}
-      body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;color:var(--fg);background:linear-gradient(180deg,#f8fafc, #eef2f7)}
+      body{font-family:'Inter', -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;color:var(--fg);background:linear-gradient(180deg,#f8fafc, #eef2f7)}
       header{padding:64px 20px}
       .wrap{max-width:960px;margin:0 auto}
       .hero{display:flex;gap:32px;align-items:center;flex-wrap:wrap}
@@ -20,6 +23,7 @@
       .cta{display:flex;gap:12px;align-items:center;margin-top:8px}
       .btn{display:inline-block;background:var(--brand);color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px}
       .btn.secondary{background:#fff;color:#111;border:1px solid var(--border)}
+      .btn.small{padding:8px 12px;font-size:13px}
       .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px}
       .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
       .muted{color:var(--muted)}
@@ -39,6 +43,7 @@
           <p class="subtitle">Intercepts paste and types your clipboard with natural keystrokes. Preserves indentation, supports instant cancel, and lets you tune speed.</p>
           <div class="cta">
             <a class="btn" href="HumanPaste.dmg">Download for macOS</a>
+            <a class="btn secondary small" href="https://harshalarakala.com">harshalarakala.com</a>
           </div>
           <p class="muted" style="margin-top:10px">After download, move the app to <code>/Applications</code> and grant Accessibility + Input Monitoring in System Settings → Privacy &amp; Security.</p>
         </div>
