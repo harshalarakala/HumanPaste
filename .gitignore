@@ -1,0 +1,10 @@
+.DS_Store
+dist/
+human_paste_swift
+*.dSYM
+*.xcworkspace
+*.xcodeproj
+DerivedData/
+*.dmgs
+*.log
+
