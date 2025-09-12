@@ -35,8 +35,10 @@
       .dl-text{line-height:1.2}
       .dl-title{font-weight:600}
       .dl-sub{font-size:12px;color:#9aa6b2}
-      .dl-action a{display:inline-flex;align-items:center;gap:8px;background:#111827;color:#fff;text-decoration:none;padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.08)}
-      .dl-action a:hover{background:#0f172a}
+      .dl-action a{display:inline-flex;align-items:center;gap:8px;background:#111827;color:#fff;text-decoration:none;padding:10px 14px;border-radius:12px;border:2px solid rgba(255,255,255,.95);box-shadow:0 0 0 0 rgba(255,255,255,.55);animation:dl-pulse 1.6s ease-in-out infinite}
+      .dl-action a:hover{background:#0f172a;border-color:#ffffff}
+      @keyframes dl-pulse{0%{box-shadow:0 0 0 0 rgba(255,255,255,.55)}70%{box-shadow:0 0 0 10px rgba(255,255,255,0)}100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}}
+      @media (prefers-reduced-motion: reduce){.dl-action a{animation:none}}
       .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px}
       .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
       .muted{color:var(--muted)}
@@ -58,9 +60,6 @@
           <div class="cta" style="width:100%">
             <div class="dl-card" style="width:100%">
               <div class="dl-info">
-                <div class="dl-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 3a1 1 0 0 1 1 1v8.586l2.293-2.293a1 1 0 1 1 1.414 1.414l-4 4a1 1 0 0 1-1.414 0l-4-4A1 1 0 1 1 8.707 10.293L11 12.586V4a1 1 0 0 1 1-1ZM5 20a1 1 0 1 1 0-2h14a1 1 0 1 1 0 2H5Z"/></svg>
-                </div>
                 <div class="dl-text">
                   <div class="dl-title">Download for macOS</div>
                   <div class="dl-sub">Universal DMG • Latest build</div>
