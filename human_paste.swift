@@ -11,6 +11,7 @@ class HumanPaste {
     private var eventThread: Thread?
     private var isEnabled = false
     private var isTyping = false
+    private var interceptEnabled = true
     private var cooldownUntil: Date?
     private var cancelRequested = false
     private let stateQueue = DispatchQueue(label: "HumanPaste.state", attributes: .concurrent)
@@ -19,10 +20,21 @@ class HumanPaste {
     private var typingDelayBaseUs: useconds_t = 80_000   // default ~150 WPM => ~80ms/char
     private var typingDelayJitterUs: useconds_t = 40_000 // 50% jitter
     private var wordsPerMinute: Int = 150
+    // Hesitation settings
+    private var hesitationEnabled: Bool = false
+    private var hesitationMaxMs: Int = 500
+    // Auto-indent adjustment
+    private var autoIndentAdjustEnabled: Bool = true
 
     init() {
         let saved = UserDefaults.standard.integer(forKey: "typing_wpm")
         if saved > 0 { wordsPerMinute = saved }
+        hesitationEnabled = UserDefaults.standard.bool(forKey: "hesitation_enabled")
+        let savedHes = UserDefaults.standard.integer(forKey: "hesitation_max_ms")
+        if savedHes > 0 { hesitationMaxMs = savedHes }
+        if UserDefaults.standard.object(forKey: "autoindent_adjust_enabled") != nil {
+            autoIndentAdjustEnabled = UserDefaults.standard.bool(forKey: "autoindent_adjust_enabled")
+        }
         updateDelaysForWpm()
     }
 
@@ -41,6 +53,22 @@ class HumanPaste {
     }
 
     func getWordsPerMinute() -> Int { wordsPerMinute }
+
+    func setHesitationEnabled(_ enabled: Bool) {
+        hesitationEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "hesitation_enabled")
+    }
+    func getHesitationEnabled() -> Bool { hesitationEnabled }
+    func setHesitationMaxMs(_ ms: Int) {
+        hesitationMaxMs = max(50, min(1_500, ms))
+        UserDefaults.standard.set(hesitationMaxMs, forKey: "hesitation_max_ms")
+    }
+    func getHesitationMaxMs() -> Int { hesitationMaxMs }
+    func setAutoIndentAdjustEnabled(_ enabled: Bool) {
+        autoIndentAdjustEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "autoindent_adjust_enabled")
+    }
+    func getAutoIndentAdjustEnabled() -> Bool { autoIndentAdjustEnabled }
 
     private func setIsTyping(_ value: Bool) {
         stateQueue.async(flags: .barrier) { self.isTyping = value }
@@ -74,6 +102,11 @@ class HumanPaste {
         thread.start()
         return true
     }
+
+    func setInterceptEnabled(_ enabled: Bool) {
+        interceptEnabled = enabled
+    }
+    func getInterceptEnabled() -> Bool { interceptEnabled }
 
     private func startOnCurrentRunLoop() {
         print("Human Paste enabled. Press Cmd+V to intercept paste operations.")
@@ -148,13 +181,44 @@ class HumanPaste {
         if type == .keyDown {
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             let flags = event.flags
+            let hasCmd = flags.contains(.maskCommand)
+            let hasShift = flags.contains(.maskShift)
+            let hasOption = flags.contains(.maskAlternate)
+
+            // Global shortcuts (active while tap is running)
+            if hasCmd && (hasShift || hasOption) {
+                switch keyCode {
+                case 14: // E
+                    setInterceptEnabled(true)
+                    print("HumanPaste: Intercept enabled")
+                    return nil
+                case 2: // D
+                    setInterceptEnabled(false)
+                    print("HumanPaste: Intercept disabled (system paste will pass through)")
+                    return nil
+                case 30: // ] faster (or Cmd+Option+])
+                    setWordsPerMinute(getWordsPerMinute() + 10)
+                    print("HumanPaste: WPM -> \(getWordsPerMinute())")
+                    return nil
+                case 33: // [ slower (or Cmd+Option+[)
+                    setWordsPerMinute(getWordsPerMinute() - 10)
+                    print("HumanPaste: WPM -> \(getWordsPerMinute())")
+                    return nil
+                default:
+                    break
+                }
+            }
             
             // Check for Cmd+V (keyCode 9 is 'v', kCGEventFlagMaskCommand is Cmd)
-            if keyCode == 9 && flags.contains(.maskCommand) {
+            if keyCode == 9 && hasCmd {
                 // Enforce cooldown after a cancellation
                 if let until = cooldownUntil, Date() < until {
                     print("Cmd+V ignored: cooldown active")
                     return nil
+                }
+                // If intercept disabled, allow normal paste
+                if !interceptEnabled {
+                    return Unmanaged.passUnretained(event)
                 }
                 print("Cmd+V detected! Intercepting paste...")
                 
@@ -189,20 +253,75 @@ class HumanPaste {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
         let source = CGEventSource(stateID: .hidSystemState)
 
-        for ch in normalized {
+        var isStartOfLine = true
+        var recentWordChars = 0
+        let chars = Array(normalized)
+        var i = 0
+        while i < chars.count {
             if isCancelRequested() { break }
+            var ch = chars[i]
 
             if ch == "\n" {
                 pressKey(source: source, keyCode: 36) // Return
+                // Hesitation between lines (think pause)
+                if getHesitationEnabled() {
+                    let maxMs = getHesitationMaxMs()
+                    let pause = Int.random(in: 0...maxMs)
+                    usleep(useconds_t(pause * 1000))
+                }
+                if getAutoIndentAdjustEnabled() {
+                    // Determine desired indentation on the upcoming line from source
+                    var k = i + 1
+                    var desiredTabs = 0
+                    var desiredSpaces = 0
+                    while k < chars.count, chars[k] == "\t" { desiredTabs += 1; k += 1 }
+                    while k < chars.count, chars[k] == " " { desiredSpaces += 1; k += 1 }
+                    // Safely outdent via Shift+Tab a few times (doesn't affect newlines)
+                    for _ in 0..<8 { pressKeyWithFlags(source: source, keyCode: 48, flags: .maskShift); usleep(1200) }
+                    // Insert the exact desired indentation
+                    if desiredTabs > 0 {
+                        for _ in 0..<desiredTabs { pressKey(source: source, keyCode: 48) }
+                    }
+                    if desiredSpaces > 0 {
+                        for _ in 0..<desiredSpaces { typeCharacter(source: source, char: " ") }
+                    }
+                    isStartOfLine = false
+                    i = k
+                    continue
+                }
+                isStartOfLine = true
+                i += 1
+                continue
             } else if ch == "\t" {
                 pressKey(source: source, keyCode: 48) // Tab
             } else {
                 typeCharacter(source: source, char: ch)
+                if ch.isLetter || ch.isNumber || ch == "_" {
+                    recentWordChars += 1
+                } else {
+                    recentWordChars = 0
+                }
+                isStartOfLine = false
             }
 
             pthread_yield_np()
             if isCancelRequested() { break }
-            sleepBetweenKeystrokes()
+            // Burst typing within words; extra pause at word boundaries
+            if ch == " " || ch == "," || ch == ";" || ch == ")" || ch == "(" || ch == ":" {
+                let base = Int(typingDelayBaseUs)
+                let jitter = Int(typingDelayJitterUs)
+                let delay = min(base + (jitter > 0 ? Int.random(in: 0...jitter) : 0) + base/2, base*4)
+                usleep(useconds_t(delay))
+                recentWordChars = 0
+            } else {
+                // Faster while in a word
+                let base = Int(typingDelayBaseUs)
+                let jitter = Int(typingDelayJitterUs)
+                let fast = max(2_000, base - base/3)
+                let delay = max(2_000, min(fast + (jitter > 0 ? Int.random(in: 0...(jitter/2)) : 0), base*2))
+                usleep(useconds_t(delay))
+            }
+            i += 1
         }
 
         print(isCancelRequested() ? "Cancelled typing" : "Finished typing")
@@ -227,6 +346,15 @@ class HumanPaste {
         down?.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: chars)
         up?.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: chars)
         
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
+    }
+    
+    func pressKeyWithFlags(source: CGEventSource?, keyCode: CGKeyCode, flags: CGEventFlags) {
+        let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
+        let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+        down?.flags = flags
+        up?.flags = flags
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
     }
@@ -283,6 +411,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         toggleItem.state = .off
         toggleItem.target = self
         menu.addItem(toggleItem)
+        // Hesitation controls
+        let hesItem = NSMenuItem()
+        let hesToggle = NSButton(checkboxWithTitle: "Hesitation between lines", target: self, action: #selector(hesitationToggled(_:)))
+        hesToggle.state = humanPaste.getHesitationEnabled() ? .on : .off
+        let hesSlider = NSSlider(value: Double(humanPaste.getHesitationMaxMs()), minValue: 100, maxValue: 1500, target: self, action: #selector(hesitationMsChanged(_:)))
+        hesSlider.isContinuous = true
+        let hesLabel = NSTextField(labelWithString: "Max pause: \(humanPaste.getHesitationMaxMs()) ms")
+        let hesStack = NSStackView(views: [hesToggle, hesSlider, hesLabel])
+        hesStack.orientation = .vertical
+        hesStack.spacing = 6
+        hesItem.view = hesStack
+        menu.addItem(hesItem)
         // WPM slider
         let wpmItem = NSMenuItem()
         let slider = NSSlider(value: Double(humanPaste.getWordsPerMinute()), minValue: 20, maxValue: 300, target: self, action: #selector(wpmChanged(_:)))
@@ -295,6 +435,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         wpmView.spacing = 6
         wpmItem.view = wpmView
         menu.addItem(wpmItem)
+        // Auto-indent adjust toggle
+        let aiItem = NSMenuItem()
+        let aiToggle = NSButton(checkboxWithTitle: "Adjust for editor auto-indent", target: self, action: #selector(autoIndentToggled(_:)))
+        aiToggle.state = humanPaste.getAutoIndentAdjustEnabled() ? .on : .off
+        aiItem.view = aiToggle
+        menu.addItem(aiItem)
         menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.target = self
@@ -337,6 +483,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
            stack.views.count >= 3, let label = stack.views[2] as? NSTextField {
             label.stringValue = "Current: \(wpm) WPM"
         }
+    }
+
+    @objc private func hesitationToggled(_ sender: NSButton) {
+        humanPaste.setHesitationEnabled(sender.state == .on)
+    }
+
+    @objc private func hesitationMsChanged(_ sender: NSSlider) {
+        humanPaste.setHesitationMaxMs(Int(sender.integerValue))
+        // Update label under the slider
+        if let item = statusItem.menu?.items.first(where: { ($0.view as? NSStackView)?.views.contains(sender) == true }),
+           let stack = item.view as? NSStackView, stack.views.count >= 3,
+           let label = stack.views[2] as? NSTextField {
+            label.stringValue = "Max pause: \(Int(sender.integerValue)) ms"
+        }
+    }
+
+    @objc private func autoIndentToggled(_ sender: NSButton) {
+        humanPaste.setAutoIndentAdjustEnabled(sender.state == .on)
     }
     
     @objc private func toggleEnabled(_ sender: NSMenuItem) {

@@ -2,12 +2,44 @@ HumanPaste
 
 HumanPaste is a small macOS utility that intercepts Cmd+V and “types” your clipboard contents with human‑like keystrokes. It preserves indentation, supports cancellation on a second Cmd+V, and lets you configure typing speed with jitter to feel natural.
 
-Features
-- Intercepts Cmd+V globally while enabled and types the clipboard content
-- Preserves spaces, tabs, and newlines exactly
-- Cancel by pressing Cmd+V again; 2s cooldown after cancel
-- Configurable typing speed and randomized per‑keystroke delay
-- Simple UI: window checkbox to Enable/Disable; optional menu bar item
+## Features
+
+- Human-like Cmd+V: types the clipboard with realistic keystrokes
+- Preserves spaces, tabs, and newlines
+- Cancel on second Cmd+V with a 2s cooldown
+- Typing speed slider (WPM) with randomized jitter
+- Hesitation between lines: optional “think” pause up to a configurable max
+- Burst typing: faster within words, slightly longer between words
+- Auto-indent adjustment: compensates for editor auto-indent to avoid doubled indents
+- Minimal menu UI + small debug window
+
+## Shortcuts (global while enabled)
+
+- Cmd+Shift+E or Cmd+Option+E: enable intercept
+- Cmd+Shift+D or Cmd+Option+D: disable intercept
+- Cmd+Shift+] or Cmd+Option+]: increase WPM by 10
+- Cmd+Shift+[ or Cmd+Option+[: decrease WPM by 10
+
+## Menu options
+
+- Enable/Disable
+- Typing Speed (WPM) slider with current value label
+- Hesitation between lines toggle + Max pause (ms) slider
+- Adjust for editor auto-indent toggle
+
+## Local testing
+
+- Build the app and a DMG:
+```
+./build.sh
+```
+- Run the built app directly:
+```
+open "$(pwd)/dist/HumanPaste.app"
+```
+- If Gatekeeper blocks it (downloaded build), see docs/index.html or right‑click → Open.
+- Grant Accessibility and Input Monitoring in System Settings → Privacy & Security.
+- Use the HP menu to enable and adjust WPM/hesitation/auto-indent.
 
 Build
 1) Requirements: Xcode command line tools (swiftc), macOS 12+
