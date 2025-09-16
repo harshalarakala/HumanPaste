@@ -278,10 +278,14 @@ class HumanPaste {
             var ch = chars[i]
 
             if ch == "\n" {
-                print("DEBUG: Processing newline at position \(i)")
                 pressKey(source: source, keyCode: 36) // Return
-                // Note: Auto-indent adjustment disabled by default due to cursor positioning issues
-                // Users can re-enable in menu if needed for specific editors
+                
+                // Auto-indent adjustment: only if next line has indentation to override
+                if getAutoIndentAdjustEnabled() && i + 1 < chars.count && (chars[i + 1] == " " || chars[i + 1] == "\t") {
+                    usleep(15000) // Delay to let editor settle
+                    // Use Cmd+Left Arrow to move to beginning of current line (not document start)
+                    pressKeyWithFlags(source: source, keyCode: 123, flags: .maskCommand) // Cmd+Left Arrow
+                }
                 
                 // Hesitation between lines (think pause)
                 if getHesitationEnabled() {
@@ -293,12 +297,8 @@ class HumanPaste {
                 i += 1
                 continue
             } else if ch == "\t" {
-                print("DEBUG: Processing tab at position \(i)")
                 pressKey(source: source, keyCode: 48) // Tab
             } else {
-                if ch == " " {
-                    print("DEBUG: Processing space at position \(i)")
-                }
                 typeCharacter(source: source, char: ch)
                 if ch.isLetter || ch.isNumber || ch == "_" {
                     recentWordChars += 1

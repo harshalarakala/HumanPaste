@@ -74,6 +74,13 @@ cp -R "$APP_DIR" "$APP_TMP/"
 hdiutil create -volname "$APP_NAME" -srcfolder "$APP_TMP" -ov -format UDZO "$DMG" >/dev/null
 echo "DMG created: $DMG"
 
+echo ""
+echo "Resetting permissions for clean testing..."
+tccutil reset Accessibility dev.local.humanpaste 2>/dev/null || true
+tccutil reset ListenEvent dev.local.humanpaste 2>/dev/null || true
+echo "✅ Permissions reset complete!"
+echo "💡 Launch with: open \"$APP_DIR\""
+
 # Update GitHub Pages docs with latest DMG
 mkdir -p "$DOCS_DIR"
 cp -f "$DMG" "$DOCS_DIR/$APP_NAME.dmg"
