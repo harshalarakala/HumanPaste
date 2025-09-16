@@ -24,7 +24,7 @@ class HumanPaste {
     private var hesitationEnabled: Bool = false
     private var hesitationMaxMs: Int = 500
     // Auto-indent adjustment
-    private var autoIndentAdjustEnabled: Bool = true
+    private var autoIndentAdjustEnabled: Bool = false
 
     init() {
         let saved = UserDefaults.standard.integer(forKey: "typing_wpm")
@@ -103,6 +103,17 @@ class HumanPaste {
         return true
     }
 
+    // Detect if a browser is frontmost (web editors often bind Cmd+Enter and handle Shift+Tab specially)
+    private func isFrontmostBrowser() -> Bool {
+        if let bid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+            if bid == "com.apple.Safari" { return true }
+            if bid.hasPrefix("com.google.Chrome") { return true }
+            if bid.hasPrefix("org.mozilla.firefox") { return true }
+            if bid.hasPrefix("com.microsoft.edgemac") { return true }
+        }
+        return false
+    }
+
     func setInterceptEnabled(_ enabled: Bool) {
         interceptEnabled = enabled
     }
@@ -173,6 +184,11 @@ class HumanPaste {
                 cancelTyping()
                 cooldownUntil = Date().addingTimeInterval(2)
                 // Suppress original Cmd+V event
+                return nil
+            }
+            // Suppress Cmd+Enter while typing to avoid triggering Run/Submit in editors
+            if type == .keyDown && keyCode == 36 && flags.contains(.maskCommand) {
+                print("Suppressing Cmd+Enter during typing")
                 return nil
             }
             return Unmanaged.passUnretained(event)
@@ -262,39 +278,27 @@ class HumanPaste {
             var ch = chars[i]
 
             if ch == "\n" {
+                print("DEBUG: Processing newline at position \(i)")
                 pressKey(source: source, keyCode: 36) // Return
+                // Note: Auto-indent adjustment disabled by default due to cursor positioning issues
+                // Users can re-enable in menu if needed for specific editors
+                
                 // Hesitation between lines (think pause)
                 if getHesitationEnabled() {
                     let maxMs = getHesitationMaxMs()
                     let pause = Int.random(in: 0...maxMs)
                     usleep(useconds_t(pause * 1000))
                 }
-                if getAutoIndentAdjustEnabled() {
-                    // Determine desired indentation on the upcoming line from source
-                    var k = i + 1
-                    var desiredTabs = 0
-                    var desiredSpaces = 0
-                    while k < chars.count, chars[k] == "\t" { desiredTabs += 1; k += 1 }
-                    while k < chars.count, chars[k] == " " { desiredSpaces += 1; k += 1 }
-                    // Safely outdent via Shift+Tab a few times (doesn't affect newlines)
-                    for _ in 0..<8 { pressKeyWithFlags(source: source, keyCode: 48, flags: .maskShift); usleep(1200) }
-                    // Insert the exact desired indentation
-                    if desiredTabs > 0 {
-                        for _ in 0..<desiredTabs { pressKey(source: source, keyCode: 48) }
-                    }
-                    if desiredSpaces > 0 {
-                        for _ in 0..<desiredSpaces { typeCharacter(source: source, char: " ") }
-                    }
-                    isStartOfLine = false
-                    i = k
-                    continue
-                }
                 isStartOfLine = true
                 i += 1
                 continue
             } else if ch == "\t" {
+                print("DEBUG: Processing tab at position \(i)")
                 pressKey(source: source, keyCode: 48) // Tab
             } else {
+                if ch == " " {
+                    print("DEBUG: Processing space at position \(i)")
+                }
                 typeCharacter(source: source, char: ch)
                 if ch.isLetter || ch.isNumber || ch == "_" {
                     recentWordChars += 1
@@ -356,8 +360,16 @@ class HumanPaste {
         down?.flags = flags
         up?.flags = flags
         down?.post(tap: .cghidEventTap)
+        usleep(1000) // Very short delay between key down and up
         up?.post(tap: .cghidEventTap)
     }
+
+    private func moveToLineStart(source: CGEventSource?) {
+        // Use Ctrl+A to move to beginning of line (key code 0 is 'A')
+        pressKeyWithFlags(source: source, keyCode: 0, flags: .maskControl) // Ctrl+A
+    }
+
+    // Removed deletion-based line clearing by request; we only reposition to line start now.
     
     private func cancelTyping() {
         requestCancel()
