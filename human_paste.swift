@@ -154,14 +154,21 @@ class HumanPaste {
     }
     func getInterceptEnabled() -> Bool { interceptEnabled }
 
-    /// Post a normal ⌘V paste; next ⌘V seen by the tap passes through (avoids re-triggering human paste).
-    private func postSystemCmdV() {
-        stateQueue.sync(flags: .barrier) { self.bypassNextCmdV = true }
+    /// Instant paste for ⇧⌘V: macOS apps use ⌘V; Windows/Linux guests in a VM expect ⌃V.
+    private func postInstantPaste() {
         let source = CGEventSource(stateID: .hidSystemState)
         let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
         let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-        down?.flags = .maskCommand
-        up?.flags = .maskCommand
+        switch getLineStartEnvironment() {
+        case .macNative:
+            stateQueue.sync(flags: .barrier) { self.bypassNextCmdV = true }
+            down?.flags = .maskCommand
+            up?.flags = .maskCommand
+        case .windowsHome, .windowsCtrlA:
+            // Guest OS paste — do not use ⌘V (often ignored or wrong inside VMs)
+            down?.flags = .maskControl
+            up?.flags = .maskControl
+        }
         down?.post(tap: .cghidEventTap)
         usleep(2_000)
         up?.post(tap: .cghidEventTap)
@@ -239,16 +246,16 @@ class HumanPaste {
             let hasCmd = flags.contains(.maskCommand)
             let hasShift = flags.contains(.maskShift)
 
-            // ⇧⌘V → instant system paste (even when human paste intercepts ⌘V)
+            // ⇧⌘V → instant paste (⌘V on Mac, ⌃V when line-start mode is Windows VM — see menu slider)
             if keyCode == 9 && hasCmd && hasShift {
                 if interceptEnabled {
-                    postSystemCmdV()
+                    postInstantPaste()
                     return nil
                 }
                 return Unmanaged.passUnretained(event)
             }
 
-            // Synthesized ⌘V from postSystemCmdV must pass through to the focused app
+            // Synthesized ⌘V must pass through so it is not turned into human paste again
             if keyCode == 9 && hasCmd && consumeBypassIfNeededForCmdV(flags: flags) {
                 return Unmanaged.passUnretained(event)
             }
@@ -495,6 +502,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var menuEnvSlider: NSSlider?
     private weak var menuAiToggle: NSButton?
 
+    /// Total width for custom menu panels (prevents clipped controls and zero-height layout).
+    private let menuPanelWidth: CGFloat = 272
+
     private lazy var statusIconIdle: NSImage? = {
         let img = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "HumanPaste")
         img?.isTemplate = true
@@ -542,51 +552,56 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(pasteHint)
         menu.addItem(NSMenuItem.separator())
 
-        // Hesitation
+        // Hesitation — label above slider so values are not crushed against the next section
         let hesItem = NSMenuItem()
         let hesToggle = NSButton(checkboxWithTitle: "Hesitation between lines", target: self, action: #selector(hesitationToggled(_:)))
         hesToggle.state = humanPaste.getHesitationEnabled() ? .on : .off
+        hesToggle.setContentHuggingPriority(.required, for: .horizontal)
+        let hesLabel = NSTextField(labelWithString: "Max pause: \(humanPaste.getHesitationMaxMs()) ms")
+        hesLabel.font = NSFont.systemFont(ofSize: 11)
+        hesLabel.textColor = .labelColor
+        menuHesitationLabel = hesLabel
         let hesSlider = NSSlider(value: Double(humanPaste.getHesitationMaxMs()), minValue: 100, maxValue: 1500, target: self, action: #selector(hesitationMsChanged(_:)))
         hesSlider.isContinuous = true
-        hesSlider.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        let hesLabel = NSTextField(labelWithString: "Max pause: \(humanPaste.getHesitationMaxMs()) ms")
-        hesLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-        menuHesitationLabel = hesLabel
+        constrainSliderWidth(hesSlider)
         let hesStack = NSStackView(views: [
-            NSTextField(labelWithString: "Line pauses"),
+            menuSectionHeaderField("Line pauses"),
             hesToggle,
-            hesSlider,
-            hesLabel
+            hesLabel,
+            hesSlider
         ])
-        hesStack.orientation = .vertical
-        hesStack.alignment = .leading
-        hesStack.spacing = 6
-        hesItem.view = hesStack
+        attachMenuPanel(hesStack, to: hesItem)
         menu.addItem(hesItem)
 
         // WPM
         let wpmItem = NSMenuItem()
-        let wpmCaption = NSTextField(labelWithString: "Typing speed (WPM)")
+        let valueLabel = NSTextField(labelWithString: "Current: \(humanPaste.getWordsPerMinute()) WPM")
+        valueLabel.font = NSFont.systemFont(ofSize: 11)
+        valueLabel.textColor = .labelColor
+        menuWpmLabel = valueLabel
         let slider = NSSlider(value: Double(humanPaste.getWordsPerMinute()), minValue: 20, maxValue: 300, target: self, action: #selector(wpmChanged(_:)))
         slider.isContinuous = true
-        slider.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        let valueLabel = NSTextField(labelWithString: "Current: \(humanPaste.getWordsPerMinute()) WPM")
-        valueLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-        menuWpmLabel = valueLabel
-        let wpmView = NSStackView(views: [wpmCaption, slider, valueLabel])
-        wpmView.orientation = .vertical
-        wpmView.alignment = .leading
-        wpmView.spacing = 6
-        wpmItem.view = wpmView
+        constrainSliderWidth(slider)
+        let wpmView = NSStackView(views: [
+            menuSectionHeaderField("Typing speed"),
+            valueLabel,
+            slider
+        ])
+        attachMenuPanel(wpmView, to: wpmItem)
         menu.addItem(wpmItem)
 
-        // Auto-indent + Windows / VM line-start
+        // Auto-indent + line-start (Mac vs Windows VM)
         let aiItem = NSMenuItem()
         let aiToggle = NSButton(checkboxWithTitle: "Adjust for editor auto-indent", target: self, action: #selector(autoIndentToggled(_:)))
         aiToggle.state = humanPaste.getAutoIndentAdjustEnabled() ? .on : .off
+        aiToggle.setContentHuggingPriority(.required, for: .horizontal)
         menuAiToggle = aiToggle
-        let envCaption = NSTextField(labelWithString: "After newline, jump to line start as:")
-        envCaption.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let envCaption = menuSectionHeaderField("Line start after newline")
+        let envLabel = NSTextField(labelWithString: humanPaste.getLineStartEnvironment().menuLabel)
+        envLabel.font = NSFont.systemFont(ofSize: 11)
+        envLabel.textColor = .labelColor
+        envLabel.preferredMaxLayoutWidth = menuPanelWidth - 28
+        menuEnvLabel = envLabel
         let envSlider = NSSlider(
             value: Double(humanPaste.getLineStartEnvironment().rawValue),
             minValue: 0,
@@ -597,16 +612,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         envSlider.numberOfTickMarks = 3
         envSlider.allowsTickMarkValuesOnly = true
         envSlider.isContinuous = true
-        envSlider.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        constrainSliderWidth(envSlider)
         menuEnvSlider = envSlider
-        let envLabel = NSTextField(labelWithString: humanPaste.getLineStartEnvironment().menuLabel)
-        envLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-        menuEnvLabel = envLabel
-        let aiStack = NSStackView(views: [aiToggle, envCaption, envSlider, envLabel])
-        aiStack.orientation = .vertical
-        aiStack.alignment = .leading
-        aiStack.spacing = 6
-        aiItem.view = aiStack
+        let tickHint = NSTextField(labelWithString: "Ticks: Mac · VM Home · ⌃A")
+        tickHint.font = NSFont.systemFont(ofSize: 10)
+        tickHint.textColor = .tertiaryLabelColor
+        let aiStack = NSStackView(views: [aiToggle, envCaption, envLabel, envSlider, tickHint])
+        attachMenuPanel(aiStack, to: aiItem)
         menu.addItem(aiItem)
 
         menu.addItem(NSMenuItem.separator())
@@ -687,6 +699,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         layer.add(pulse, forKey: "hp.glow")
     }
 
+    private func menuSectionHeaderField(_ string: String) -> NSTextField {
+        let f = NSTextField(labelWithString: string)
+        f.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        f.textColor = .secondaryLabelColor
+        return f
+    }
+
+    private func constrainSliderWidth(_ slider: NSSlider) {
+        let inner = menuPanelWidth - 28 // matches horizontal edge insets on menu panels
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        slider.widthAnchor.constraint(equalToConstant: inner).isActive = true
+    }
+
+    /// Pads and sizes a stack so `NSMenuItem` lays it out reliably (avoids overlapping rows).
+    private func attachMenuPanel(_ stack: NSStackView, to item: NSMenuItem) {
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 10, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let host = NSView(frame: .zero)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: host.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            stack.widthAnchor.constraint(equalToConstant: menuPanelWidth)
+        ])
+        host.layoutSubtreeIfNeeded()
+        var h = host.fittingSize.height
+        if h < 2 { h = stack.fittingSize.height }
+        if h < 2 { h = 72 }
+        host.frame = NSRect(x: 0, y: 0, width: menuPanelWidth, height: ceil(h))
+        item.view = host
+    }
+
     private func buildMainWindow() {
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 440, height: 300),
@@ -731,16 +782,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.setCustomSpacing(8, after: title)
-        root.addSubview(stack)
+
+        let bottomSpacer = NSView()
+        bottomSpacer.translatesAutoresizingMaskIntoConstraints = false
+        bottomSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        bottomSpacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+
+        let mainStack = NSStackView(views: [stack, bottomSpacer])
+        mainStack.orientation = .vertical
+        mainStack.spacing = 0
+        mainStack.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(mainStack)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
-            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24)
+            mainStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
+            mainStack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
+            mainStack.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
+            mainStack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24)
         ])
 
-        win.setContentSize(NSSize(width: 440, height: 300))
+        win.setContentSize(NSSize(width: 440, height: 280))
         win.contentView = root
         root.frame = root.superview?.bounds ?? NSRect(x: 0, y: 0, width: 440, height: 300)
         root.autoresizingMask = [.width, .height]
