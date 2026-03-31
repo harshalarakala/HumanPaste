@@ -547,7 +547,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         toggleItem.target = self
         menu.addItem(toggleItem)
 
-        let pasteHint = NSMenuItem(title: "Regular paste: ⇧⌘V (when interceptor is on)", action: nil, keyEquivalent: "")
+        let pasteHint = NSMenuItem(title: "Instant paste: ⇧⌘V → ⌘V (Mac) or ⌃V (VM modes)", action: nil, keyEquivalent: "")
         pasteHint.isEnabled = false
         menu.addItem(pasteHint)
         menu.addItem(NSMenuItem.separator())
@@ -641,7 +641,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         button.image = statusIconIdle
         button.imagePosition = .imageOnly
         button.wantsLayer = true
-        button.toolTip = "HumanPaste — ⌘V human typing, ⇧⌘V instant paste"
+        button.toolTip = "HumanPaste — ⌘V human typing; ⇧⌘V instant paste (⌃V inside Windows when VM line-start mode is on)"
     }
 
     private func applyStatusBarVisualState() {
