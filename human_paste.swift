@@ -794,15 +794,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainStack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(mainStack)
 
+        win.contentView = root
         NSLayoutConstraint.activate([
             mainStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
             mainStack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
-            mainStack.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
+            mainStack.topAnchor.constraint(equalTo: root.topAnchor, constant: 48),
             mainStack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24)
         ])
 
-        win.setContentSize(NSSize(width: 440, height: 280))
-        win.contentView = root
+        win.setContentSize(NSSize(width: 440, height: 300))
         root.frame = root.superview?.bounds ?? NSRect(x: 0, y: 0, width: 440, height: 300)
         root.autoresizingMask = [.width, .height]
         windowToggle = toggle
