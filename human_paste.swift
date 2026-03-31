@@ -3,6 +3,22 @@ import Darwin
 import Carbon
 import ApplicationServices
 import CoreGraphics
+import QuartzCore
+
+// 0 = Mac (⌘←), 1 = Windows VM (Home), 2 = Ctrl+A (terminals / some Windows editors)
+enum LineStartEnvironment: Int {
+    case macNative = 0
+    case windowsHome = 1
+    case windowsCtrlA = 2
+
+    var menuLabel: String {
+        switch self {
+        case .macNative: return "Mac (⌘←)"
+        case .windowsHome: return "Windows VM (Home)"
+        case .windowsCtrlA: return "Windows / terminal (⌃A)"
+        }
+    }
+}
 
 class HumanPaste {
     private var eventTap: CFMachPort?
@@ -14,7 +30,10 @@ class HumanPaste {
     private var interceptEnabled = true
     private var cooldownUntil: Date?
     private var cancelRequested = false
+    private var bypassNextCmdV = false
     private let stateQueue = DispatchQueue(label: "HumanPaste.state", attributes: .concurrent)
+    /// Called on main when human typing starts/stops (for menu bar animation).
+    var typingActivityHandler: ((Bool) -> Void)?
     
     // Typing speed configuration (microseconds) driven by an average WPM with jitter
     private var typingDelayBaseUs: useconds_t = 80_000   // default ~150 WPM => ~80ms/char
@@ -23,8 +42,10 @@ class HumanPaste {
     // Hesitation settings
     private var hesitationEnabled: Bool = false
     private var hesitationMaxMs: Int = 500
-    // Auto-indent adjustment
-    private var autoIndentAdjustEnabled: Bool = false
+    // Auto-indent adjustment (after newline: move to line start so editor auto-indent does not stack with pasted leading whitespace)
+    private var autoIndentAdjustEnabled: Bool = true
+    /// How to jump to line start after newline when correcting editor auto-indent (VMs often need Home or ⌃A, not ⌘←).
+    private var lineStartEnvironment: LineStartEnvironment = .macNative
 
     init() {
         let saved = UserDefaults.standard.integer(forKey: "typing_wpm")
@@ -34,6 +55,10 @@ class HumanPaste {
         if savedHes > 0 { hesitationMaxMs = savedHes }
         if UserDefaults.standard.object(forKey: "autoindent_adjust_enabled") != nil {
             autoIndentAdjustEnabled = UserDefaults.standard.bool(forKey: "autoindent_adjust_enabled")
+        }
+        let savedEnv = UserDefaults.standard.integer(forKey: "line_start_environment")
+        if let env = LineStartEnvironment(rawValue: savedEnv) {
+            lineStartEnvironment = env
         }
         updateDelaysForWpm()
     }
@@ -69,9 +94,19 @@ class HumanPaste {
         UserDefaults.standard.set(enabled, forKey: "autoindent_adjust_enabled")
     }
     func getAutoIndentAdjustEnabled() -> Bool { autoIndentAdjustEnabled }
+    func setLineStartEnvironment(_ env: LineStartEnvironment) {
+        lineStartEnvironment = env
+        UserDefaults.standard.set(env.rawValue, forKey: "line_start_environment")
+    }
+    func getLineStartEnvironment() -> LineStartEnvironment { lineStartEnvironment }
+
+    func isInterceptorRunning() -> Bool { isEnabled }
 
     private func setIsTyping(_ value: Bool) {
-        stateQueue.async(flags: .barrier) { self.isTyping = value }
+        stateQueue.async(flags: .barrier) {
+            self.isTyping = value
+            DispatchQueue.main.async { self.typingActivityHandler?(value) }
+        }
     }
     private func getIsTyping() -> Bool {
         stateQueue.sync { isTyping }
@@ -118,6 +153,29 @@ class HumanPaste {
         interceptEnabled = enabled
     }
     func getInterceptEnabled() -> Bool { interceptEnabled }
+
+    /// Post a normal ⌘V paste; next ⌘V seen by the tap passes through (avoids re-triggering human paste).
+    private func postSystemCmdV() {
+        stateQueue.sync(flags: .barrier) { self.bypassNextCmdV = true }
+        let source = CGEventSource(stateID: .hidSystemState)
+        let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
+        let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
+        down?.flags = .maskCommand
+        up?.flags = .maskCommand
+        down?.post(tap: .cghidEventTap)
+        usleep(2_000)
+        up?.post(tap: .cghidEventTap)
+    }
+
+    private func consumeBypassIfNeededForCmdV(flags: CGEventFlags) -> Bool {
+        stateQueue.sync {
+            if bypassNextCmdV, flags.contains(.maskCommand), !flags.contains(.maskShift) {
+                bypassNextCmdV = false
+                return true
+            }
+            return false
+        }
+    }
 
     private func startOnCurrentRunLoop() {
         print("Human Paste enabled. Press Cmd+V to intercept paste operations.")
@@ -174,6 +232,28 @@ class HumanPaste {
             if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
+
+        if type == .keyDown {
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            let flags = event.flags
+            let hasCmd = flags.contains(.maskCommand)
+            let hasShift = flags.contains(.maskShift)
+
+            // ⇧⌘V → instant system paste (even when human paste intercepts ⌘V)
+            if keyCode == 9 && hasCmd && hasShift {
+                if interceptEnabled {
+                    postSystemCmdV()
+                    return nil
+                }
+                return Unmanaged.passUnretained(event)
+            }
+
+            // Synthesized ⌘V from postSystemCmdV must pass through to the focused app
+            if keyCode == 9 && hasCmd && consumeBypassIfNeededForCmdV(flags: flags) {
+                return Unmanaged.passUnretained(event)
+            }
+        }
+
         // Skip if we're currently typing to avoid feedback loops
         if getIsTyping() {
             // Allow cancellation on second Cmd+V
@@ -225,8 +305,8 @@ class HumanPaste {
                 }
             }
             
-            // Check for Cmd+V (keyCode 9 is 'v', kCGEventFlagMaskCommand is Cmd)
-            if keyCode == 9 && hasCmd {
+            // Human paste: ⌘V only (not ⇧⌘V — that is instant paste above)
+            if keyCode == 9 && hasCmd && !hasShift {
                 // Enforce cooldown after a cancellation
                 if let until = cooldownUntil, Date() < until {
                     print("Cmd+V ignored: cooldown active")
@@ -280,11 +360,11 @@ class HumanPaste {
             if ch == "\n" {
                 pressKey(source: source, keyCode: 36) // Return
                 
-                // Auto-indent adjustment: only if next line has indentation to override
-                if getAutoIndentAdjustEnabled() && i + 1 < chars.count && (chars[i + 1] == " " || chars[i + 1] == "\t") {
-                    usleep(15000) // Delay to let editor settle
-                    // Use Cmd+Left Arrow to move to beginning of current line (not document start)
-                    pressKeyWithFlags(source: source, keyCode: 123, flags: .maskCommand) // Cmd+Left Arrow
+                // After newline, many editors auto-indent; move to true line start before typing
+                // the rest of the paste so editor indent is not combined with clipboard leading spaces/tabs.
+                if getAutoIndentAdjustEnabled() && i + 1 < chars.count {
+                    usleep(45_000) // Let the editor apply auto-indent before we home the caret
+                    performLineStartAfterAutoIndent(source: source)
                 }
                 
                 // Hesitation between lines (think pause)
@@ -364,12 +444,16 @@ class HumanPaste {
         up?.post(tap: .cghidEventTap)
     }
 
-    private func moveToLineStart(source: CGEventSource?) {
-        // Use Ctrl+A to move to beginning of line (key code 0 is 'A')
-        pressKeyWithFlags(source: source, keyCode: 0, flags: .maskControl) // Ctrl+A
+    private func performLineStartAfterAutoIndent(source: CGEventSource?) {
+        switch getLineStartEnvironment() {
+        case .macNative:
+            pressKeyWithFlags(source: source, keyCode: 123, flags: .maskCommand) // ⌘←
+        case .windowsHome:
+            pressKey(source: source, keyCode: 115) // Home (common in Windows VMs)
+        case .windowsCtrlA:
+            pressKeyWithFlags(source: source, keyCode: 0, flags: .maskControl) // ⌃A
+        }
     }
-
-    // Removed deletion-based line clearing by request; we only reposition to line start now.
     
     private func cancelTyping() {
         requestCancel()
@@ -401,7 +485,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowToggle: NSButton?
     private var windowLabel: NSTextField?
     private var trustCheckTimer: Timer?
-    
+    private var statusBarAnimTimer: Timer?
+    private var statusBarPhase: CGFloat = 0
+    private var statusTypingActive = false
+    private var interceptorRunning = false
+    private weak var menuWpmLabel: NSTextField?
+    private weak var menuHesitationLabel: NSTextField?
+    private weak var menuEnvLabel: NSTextField?
+    private weak var menuEnvSlider: NSSlider?
+    private weak var menuAiToggle: NSButton?
+
+    private lazy var statusIconIdle: NSImage? = {
+        let img = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "HumanPaste")
+        img?.isTemplate = true
+        return img
+    }()
+    private lazy var statusIconActive: NSImage? = {
+        let img = NSImage(systemSymbolName: "doc.on.clipboard.fill", accessibilityDescription: "HumanPaste typing")
+        img?.isTemplate = true
+        return img
+    }()
+
     static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
@@ -414,87 +518,243 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("HumanPaste: applicationDidFinishLaunching")
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem.button {
-            button.title = "HP"
+        humanPaste.typingActivityHandler = { [weak self] typing in
+            self?.statusTypingActive = typing
+            DispatchQueue.main.async { self?.refreshStatusBarAnimation() }
         }
+
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        configureStatusItemButton()
+        applyStatusBarVisualState()
+
         let menu = NSMenu()
-        let toggleItem = NSMenuItem(title: "Enable", action: #selector(toggleEnabled(_:)), keyEquivalent: "e")
+        let header = NSMenuItem(title: "HumanPaste", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        let toggleItem = NSMenuItem(title: "Enable interceptor", action: #selector(toggleEnabled(_:)), keyEquivalent: "e")
         toggleItem.state = .off
         toggleItem.target = self
         menu.addItem(toggleItem)
-        // Hesitation controls
+
+        let pasteHint = NSMenuItem(title: "Regular paste: ⇧⌘V (when interceptor is on)", action: nil, keyEquivalent: "")
+        pasteHint.isEnabled = false
+        menu.addItem(pasteHint)
+        menu.addItem(NSMenuItem.separator())
+
+        // Hesitation
         let hesItem = NSMenuItem()
         let hesToggle = NSButton(checkboxWithTitle: "Hesitation between lines", target: self, action: #selector(hesitationToggled(_:)))
         hesToggle.state = humanPaste.getHesitationEnabled() ? .on : .off
         let hesSlider = NSSlider(value: Double(humanPaste.getHesitationMaxMs()), minValue: 100, maxValue: 1500, target: self, action: #selector(hesitationMsChanged(_:)))
         hesSlider.isContinuous = true
+        hesSlider.widthAnchor.constraint(equalToConstant: 220).isActive = true
         let hesLabel = NSTextField(labelWithString: "Max pause: \(humanPaste.getHesitationMaxMs()) ms")
-        let hesStack = NSStackView(views: [hesToggle, hesSlider, hesLabel])
+        hesLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        menuHesitationLabel = hesLabel
+        let hesStack = NSStackView(views: [
+            NSTextField(labelWithString: "Line pauses"),
+            hesToggle,
+            hesSlider,
+            hesLabel
+        ])
         hesStack.orientation = .vertical
+        hesStack.alignment = .leading
         hesStack.spacing = 6
         hesItem.view = hesStack
         menu.addItem(hesItem)
-        // WPM slider
+
+        // WPM
         let wpmItem = NSMenuItem()
+        let wpmCaption = NSTextField(labelWithString: "Typing speed (WPM)")
         let slider = NSSlider(value: Double(humanPaste.getWordsPerMinute()), minValue: 20, maxValue: 300, target: self, action: #selector(wpmChanged(_:)))
         slider.isContinuous = true
-        slider.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        slider.widthAnchor.constraint(equalToConstant: 220).isActive = true
         let valueLabel = NSTextField(labelWithString: "Current: \(humanPaste.getWordsPerMinute()) WPM")
-        valueLabel.alignment = .left
-        let wpmView = NSStackView(views: [NSTextField(labelWithString: "Typing Speed (WPM)"), slider, valueLabel])
+        valueLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        menuWpmLabel = valueLabel
+        let wpmView = NSStackView(views: [wpmCaption, slider, valueLabel])
         wpmView.orientation = .vertical
+        wpmView.alignment = .leading
         wpmView.spacing = 6
         wpmItem.view = wpmView
         menu.addItem(wpmItem)
-        // Auto-indent adjust toggle
+
+        // Auto-indent + Windows / VM line-start
         let aiItem = NSMenuItem()
         let aiToggle = NSButton(checkboxWithTitle: "Adjust for editor auto-indent", target: self, action: #selector(autoIndentToggled(_:)))
         aiToggle.state = humanPaste.getAutoIndentAdjustEnabled() ? .on : .off
-        aiItem.view = aiToggle
+        menuAiToggle = aiToggle
+        let envCaption = NSTextField(labelWithString: "After newline, jump to line start as:")
+        envCaption.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let envSlider = NSSlider(
+            value: Double(humanPaste.getLineStartEnvironment().rawValue),
+            minValue: 0,
+            maxValue: 2,
+            target: self,
+            action: #selector(lineStartEnvChanged(_:))
+        )
+        envSlider.numberOfTickMarks = 3
+        envSlider.allowsTickMarkValuesOnly = true
+        envSlider.isContinuous = true
+        envSlider.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        menuEnvSlider = envSlider
+        let envLabel = NSTextField(labelWithString: humanPaste.getLineStartEnvironment().menuLabel)
+        envLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        menuEnvLabel = envLabel
+        let aiStack = NSStackView(views: [aiToggle, envCaption, envSlider, envLabel])
+        aiStack.orientation = .vertical
+        aiStack.alignment = .leading
+        aiStack.spacing = 6
+        aiItem.view = aiStack
         menu.addItem(aiItem)
+
         menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
         statusItem.menu = menu
 
-        // Debug: show a small window so we can see the app is running
+        let aiOn = humanPaste.getAutoIndentAdjustEnabled()
+        menuEnvSlider?.isEnabled = aiOn
+        menuEnvLabel?.textColor = aiOn ? .labelColor : .disabledControlTextColor
+
+        buildMainWindow()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func configureStatusItemButton() {
+        guard let button = statusItem.button else { return }
+        button.title = ""
+        button.image = statusIconIdle
+        button.imagePosition = .imageOnly
+        button.wantsLayer = true
+        button.toolTip = "HumanPaste — ⌘V human typing, ⇧⌘V instant paste"
+    }
+
+    private func applyStatusBarVisualState() {
+        guard let button = statusItem.button else { return }
+        statusBarAnimTimer?.invalidate()
+        statusBarAnimTimer = nil
+        button.layer?.removeAnimation(forKey: "hp.glow")
+        if !interceptorRunning {
+            button.image = statusIconIdle
+            button.alphaValue = 0.55
+            return
+        }
+        button.alphaValue = 1.0
+        button.image = statusIconIdle
+        refreshStatusBarAnimation()
+    }
+
+    private func refreshStatusBarAnimation() {
+        guard interceptorRunning, statusItem.button != nil else { return }
+        statusBarAnimTimer?.invalidate()
+        statusBarPhase = 0
+        let interval: TimeInterval = statusTypingActive ? 0.11 : 0.045
+        statusBarAnimTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.statusBarAnimationTick()
+        }
+        if let t = statusBarAnimTimer {
+            RunLoop.main.add(t, forMode: .common)
+        }
+        startMenuBarLayerPulse(typing: statusTypingActive)
+    }
+
+    private func statusBarAnimationTick() {
+        guard let button = statusItem.button, interceptorRunning else { return }
+        statusBarPhase += statusTypingActive ? 0.65 : 0.22
+        let w = sin(Double(statusBarPhase))
+        if statusTypingActive {
+            button.alphaValue = CGFloat(0.58 + 0.42 * (w * 0.5 + 0.5))
+            button.image = (Int(statusBarPhase * 3) % 2 == 0) ? statusIconIdle : statusIconActive
+        } else {
+            button.alphaValue = CGFloat(0.78 + 0.22 * (w * 0.5 + 0.5))
+            button.image = statusIconIdle
+        }
+    }
+
+    private func startMenuBarLayerPulse(typing: Bool) {
+        guard let layer = statusItem.button?.layer else { return }
+        layer.removeAnimation(forKey: "hp.glow")
+        let pulse = CABasicAnimation(keyPath: "transform.scale")
+        pulse.fromValue = typing ? 1.0 : 0.96
+        pulse.toValue = typing ? 1.08 : 1.02
+        pulse.duration = typing ? 0.28 : 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(pulse, forKey: "hp.glow")
+    }
+
+    private func buildMainWindow() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 140),
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 300),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         win.title = "HumanPaste"
-        let label = NSTextField(labelWithString: "Toggle interceptor below. Cmd+V will be intercepted when enabled.")
-        label.frame = NSRect(x: 20, y: 84, width: 320, height: 20)
-        win.contentView?.addSubview(label)
+        win.minSize = NSSize(width: 400, height: 260)
 
-        let toggle = NSButton(checkboxWithTitle: "Enable interceptor", target: self, action: #selector(toggleFromWindow(_:)))
-        toggle.frame = NSRect(x: 20, y: 48, width: 200, height: 20)
+        let root = NSVisualEffectView()
+        root.material = .sidebar
+        root.blendingMode = .behindWindow
+        root.state = .active
+
+        let title = NSTextField(labelWithString: "HumanPaste")
+        title.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+        title.textColor = .labelColor
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        let subtitle = NSTextField(wrappingLabelWithString: "⌘V types clipboard text like a human. ⇧⌘V always pastes instantly (system paste). Use the menu bar icon for speed, pauses, and Windows VM line-start options.")
+        subtitle.font = NSFont.systemFont(ofSize: 13)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+
+        let toggle = NSButton(checkboxWithTitle: "Enable interceptor (menu bar)", target: self, action: #selector(toggleFromWindow(_:)))
         toggle.state = .off
-        win.contentView?.addSubview(toggle)
+        toggle.translatesAutoresizingMaskIntoConstraints = false
 
-        let quitBtn = NSButton(title: "Quit", target: self, action: #selector(quit(_:)))
-        quitBtn.frame = NSRect(x: 20, y: 16, width: 80, height: 24)
-        win.contentView?.addSubview(quitBtn)
+        let openMenuHint = NSTextField(wrappingLabelWithString: "Tip: click the clipboard icon in the menu bar for sliders and shortcuts (⌘⇧E enable intercept, ⌘⇧D disable).")
+        openMenuHint.font = NSFont.systemFont(ofSize: 12)
+        openMenuHint.textColor = .tertiaryLabelColor
+        openMenuHint.translatesAutoresizingMaskIntoConstraints = false
 
+        let quitBtn = NSButton(title: "Quit HumanPaste", target: self, action: #selector(quit(_:)))
+        quitBtn.bezelStyle = .rounded
+        quitBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [title, subtitle, toggle, openMenuHint, quitBtn])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.setCustomSpacing(8, after: title)
+        root.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
+            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24)
+        ])
+
+        win.setContentSize(NSSize(width: 440, height: 300))
+        win.contentView = root
+        root.frame = root.superview?.bounds ?? NSRect(x: 0, y: 0, width: 440, height: 300)
+        root.autoresizingMask = [.width, .height]
         windowToggle = toggle
-        windowLabel = label
+        windowLabel = subtitle
         window = win
         win.center()
         win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func wpmChanged(_ sender: NSSlider) {
         let wpm = Int(sender.integerValue)
         humanPaste.setWordsPerMinute(wpm)
-        if let stack = (statusItem.menu?.items.first { ($0.view as? NSStackView) != nil })?.view as? NSStackView,
-           stack.views.count >= 3, let label = stack.views[2] as? NSTextField {
-            label.stringValue = "Current: \(wpm) WPM"
-        }
+        menuWpmLabel?.stringValue = "Current: \(wpm) WPM"
     }
 
     @objc private func hesitationToggled(_ sender: NSButton) {
@@ -503,16 +763,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func hesitationMsChanged(_ sender: NSSlider) {
         humanPaste.setHesitationMaxMs(Int(sender.integerValue))
-        // Update label under the slider
-        if let item = statusItem.menu?.items.first(where: { ($0.view as? NSStackView)?.views.contains(sender) == true }),
-           let stack = item.view as? NSStackView, stack.views.count >= 3,
-           let label = stack.views[2] as? NSTextField {
-            label.stringValue = "Max pause: \(Int(sender.integerValue)) ms"
-        }
+        menuHesitationLabel?.stringValue = "Max pause: \(Int(sender.integerValue)) ms"
     }
 
     @objc private func autoIndentToggled(_ sender: NSButton) {
         humanPaste.setAutoIndentAdjustEnabled(sender.state == .on)
+        let on = sender.state == .on
+        menuEnvSlider?.isEnabled = on
+        menuEnvLabel?.textColor = on ? .labelColor : .disabledControlTextColor
+    }
+
+    @objc private func lineStartEnvChanged(_ sender: NSSlider) {
+        let raw = Int(round(sender.doubleValue))
+        let env = LineStartEnvironment(rawValue: raw) ?? .macNative
+        humanPaste.setLineStartEnvironment(env)
+        menuEnvLabel?.stringValue = env.menuLabel
     }
     
     @objc private func toggleEnabled(_ sender: NSMenuItem) {
@@ -532,20 +797,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if !humanPaste.start() {
                 showAccessibilityInstructions()
                 beginTrustPolling()
+                interceptorRunning = false
+                applyStatusBarVisualState()
+            } else {
+                interceptorRunning = true
+                applyStatusBarVisualState()
             }
         } else {
             humanPaste.stop()
+            interceptorRunning = false
+            applyStatusBarVisualState()
         }
-        if let menu = statusItem.menu, let item = menu.items.first {
-            item.state = enabled ? .on : .off
-            item.title = enabled ? "Disable" : "Enable"
+        if let menu = statusItem.menu,
+           let item = menu.items.first(where: { $0.action == #selector(toggleEnabled(_:)) }) {
+            item.state = (enabled && humanPaste.isInterceptorRunning()) ? .on : .off
+            item.title = (enabled && humanPaste.isInterceptorRunning()) ? "Disable interceptor" : "Enable interceptor"
         }
-        windowToggle?.state = enabled ? .on : .off
+        windowToggle?.state = (enabled && humanPaste.isInterceptorRunning()) ? .on : .off
     }
 
     private func showAccessibilityInstructions() {
         if let label = windowLabel {
-            label.stringValue = "Grant Accessibility: System Settings → Privacy & Security → Accessibility → add HumanPaste (this copy) and enable it."
+            label.stringValue = "Grant Accessibility in System Settings → Privacy & Security → Accessibility — add HumanPaste and enable it. Then turn the interceptor on again."
         }
         if let toggle = windowToggle {
             toggle.state = .off
@@ -579,6 +852,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc private func quit(_ sender: Any?) {
+        statusBarAnimTimer?.invalidate()
+        statusBarAnimTimer = nil
         humanPaste.stop()
         NSApp.terminate(nil)
     }
